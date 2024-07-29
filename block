@@ -1,0 +1,142 @@
+<?php
+/**
+ * Plugin Name: Referer Info
+ * Description: نمایش اطلاعات مرجع در منوی مدیریت وردپرس و شمارش بازدیدها.
+ * Version: 1.4
+ * Author: Your Name
+ */
+
+// جلوگیری از دسترسی مستقیم
+if (!defined('ABSPATH')) {
+    exit;
+}
+
+// افزودن منوی سفارشی به پنل مدیریت وردپرس
+add_action('admin_menu', 'referer_info_menu');
+
+function referer_info_menu() {
+    add_menu_page(
+        'Referer Info',       // عنوان صفحه
+        'Referer Info',       // عنوان منو
+        'manage_options',     // سطح دسترسی
+        'referer-info',       // اسلاگ منو
+        'referer_info_page',  // تابع نمایش صفحه
+        'dashicons-admin-site', // آیکون منو
+        6                     // موقعیت منو
+    );
+}
+
+function referer_info_page() {
+    global $wpdb;
+
+    // دریافت اطلاعات از جدول
+    $ip_table = $wpdb->prefix . 'referer_ips';
+    $url_table = $wpdb->prefix . 'referer_urls';
+    $results = $wpdb->get_results("SELECT * FROM $ip_table");
+
+    // نمایش اطلاعات
+    echo '<div class="wrap">';
+    echo '<h1>Referer Info</h1>';
+    echo '<table class="widefat fixed" cellspacing="0">';
+    echo '<thead><tr><th>ID</th><th>IP</th><th>Counter</th><th>URLs</th></tr></thead>';
+    echo '<tbody>';
+    if (!empty($results)) {
+        foreach ($results as $row) {
+            $urls = $wpdb->get_results($wpdb->prepare("SELECT url FROM $url_table WHERE ip_id = %d", $row->id));
+            echo '<tr>';
+            echo '<td>' . esc_html($row->id) . '</td>';
+            echo '<td>' . esc_html($row->ip) . '</td>';
+            echo '<td>' . esc_html($row->counter) . '</td>';
+            echo '<td>';
+            if (!empty($urls)) {
+                echo '<details>';
+                echo '<summary>URLs</summary>';
+                echo '<ul>';
+                foreach ($urls as $url) {
+                    echo '<li>' . esc_html($url->url) . '</li>';
+                }
+                echo '</ul>';
+                echo '</details>';
+            } else {
+                echo 'No URLs found';
+            }
+            echo '</td>';
+            echo '</tr>';
+        }
+    } else {
+        echo '<tr><td colspan="4">No data found</td></tr>';
+    }
+    echo '</tbody>';
+    echo '</table>';
+    echo '</div>';
+}
+
+// تابع برای خواندن IPهای بلاک شده از پایگاه داده
+function get_blocked_ips() {
+    global $wpdb;
+    $ip_table = $wpdb->prefix . 'referer_ips';
+    return $wpdb->get_col("SELECT ip FROM $ip_table WHERE counter > 10"); // مثلا اگر تعداد بازدیدها بیشتر از 10 باشد
+}
+
+// تابع برای بلاک کردن IPها
+function block_ips() {
+    $blocked_ips = get_blocked_ips();
+    $user_ip = $_SERVER['REMOTE_ADDR'];
+
+    if (in_array($user_ip, $blocked_ips)) {
+        wp_die('Your IP has been blocked.');
+    }
+}
+
+// اتصال تابع بلاک کردن به اکشن init
+add_action('init', 'block_ips');
+
+// ثبت اطلاعات مرجع و شمارش بازدیدها
+add_action('wp_footer', 'save_referer_info_custom_plugin');
+
+function save_referer_info_custom_plugin() {
+    global $wpdb;
+
+    if (isset($_SERVER['HTTP_REFERER'])) {
+        $url = $_SERVER['HTTP_REFERER'];
+        $ip = $_SERVER['REMOTE_ADDR'];
+
+        $ip_table = $wpdb->prefix . 'referer_ips';
+        $url_table = $wpdb->prefix . 'referer_urls';
+
+        // بررسی وجود IP در جدول
+        $existing_ip = $wpdb->get_row($wpdb->prepare("SELECT * FROM $ip_table WHERE ip = %s", $ip));
+
+        if ($existing_ip) {
+            // افزایش شمارنده اگر IP موجود است
+            $wpdb->update(
+                $ip_table,
+                array('counter' => $existing_ip->counter + 1),
+                array('id' => $existing_ip->id)
+            );
+            $ip_id = $existing_ip->id;
+        } else {
+            // درج اطلاعات جدید اگر IP موجود نیست
+            $wpdb->insert(
+                $ip_table,
+                array(
+                    'ip' => $ip,
+                    'counter' => 1
+                )
+            );
+            $ip_id = $wpdb->insert_id;
+        }
+
+        // ثبت URL در جدول URL‌ها
+        $existing_url = $wpdb->get_row($wpdb->prepare("SELECT * FROM $url_table WHERE ip_id = %d AND url = %s", $ip_id, $url));
+        if (!$existing_url) {
+            $wpdb->insert(
+                $url_table,
+                array(
+                    'ip_id' => $ip_id,
+                    'url' => $url
+                )
+            );
+        }
+    }
+}
